@@ -108,22 +108,6 @@ jobs:
             ! -path "./.git/*" ! -path "./build/*" ! -path "./.gradle/*" \
             | sort
 
-      - name: 🔍 Validate Gradle wrapper
-        run: |
-          echo ""
-          echo "🔍 Validating Gradle wrapper..."
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-            echo "✅ gradlew found and made executable"
-          else
-            echo "❌ gradlew not found!"
-            exit 1
-          fi
-          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "✅ gradle-wrapper.properties found"
-            echo "   $(cat gradle/wrapper/gradle-wrapper.properties | grep distributionUrl)"
-          fi
-
   # ─────────────────────────────────────────────
   # JOB 2: Unit Tests
   # ─────────────────────────────────────────────
@@ -147,8 +131,10 @@ jobs:
       - name: 📦 Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: wrapper
-          cache-read-only: false
+          gradle-version: '8.9' # <-- Ubah ke 8.9
+
+      - name: ⚙️ Generate Gradle Wrapper
+        run: gradle wrapper --gradle-version 8.9 # <-- Ubah ke 8.9
 
       - name: 🔐 Make gradlew executable
         run: chmod +x gradlew
@@ -233,7 +219,10 @@ jobs:
       - name: 📦 Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: wrapper
+          gradle-version: '8.4'
+
+      - name: ⚙️ Generate Gradle Wrapper
+        run: gradle wrapper --gradle-version 8.4
 
       - name: 🔐 Make gradlew executable
         run: chmod +x gradlew
@@ -492,3 +481,4 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          
