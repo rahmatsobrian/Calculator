@@ -81,8 +81,8 @@ jobs:
           fi
 
           # Get version info from build.gradle
-          VERSION_CODE=$(grep 'versionCode' app/build.gradle | grep -o '[0-9]*' | head -1)
-          VERSION_NAME=$(grep 'versionName' app/build.gradle | grep -oP '"[^"]+"' | tr -d '"' | head -1)
+          VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | grep -o '[0-9]*' | head -1 || echo "1")
+          VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | grep -oP '"[^"]+"' | tr -d '"' | head -1 || echo "1.0")
           SHORT_SHA=$(git rev-parse --short HEAD)
 
           echo "build_type=$BUILD_TYPE"         >> $GITHUB_OUTPUT
@@ -104,7 +104,7 @@ jobs:
         run: |
           echo ""
           echo "📁 Repository structure:"
-          find . -type f \( -name "*.kt" -o -name "*.gradle" -o -name "*.xml" \) \
+          find . -type f \( -name "*.kt" -o -name "*.gradle*" -o -name "*.xml" \) \
             ! -path "./.git/*" ! -path "./build/*" ! -path "./.gradle/*" \
             | sort
 
@@ -131,10 +131,10 @@ jobs:
       - name: 📦 Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: '8.9' # <-- Ubah ke 8.9
+          gradle-version: '8.9'
 
       - name: ⚙️ Generate Gradle Wrapper
-        run: gradle wrapper --gradle-version 8.9 # <-- Ubah ke 8.9
+        run: gradle wrapper --gradle-version 8.9
 
       - name: 🔐 Make gradlew executable
         run: chmod +x gradlew
@@ -167,12 +167,13 @@ jobs:
             exit $EXIT_CODE
           fi
 
-      - name: 📊 Upload test results
+      - name: 📊 Upload test logs & results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: unit-test-results
+          name: unit-test-logs-${{ needs.pre_build.outputs.short_sha }}
           path: |
+            test_output.log
             app/build/reports/tests/
             app/build/test-results/
           retention-days: 7
@@ -219,10 +220,10 @@ jobs:
       - name: 📦 Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: '8.4'
+          gradle-version: '8.9' # <-- SUDAH DIPERBAIKI MENJADI 8.9
 
       - name: ⚙️ Generate Gradle Wrapper
-        run: gradle wrapper --gradle-version 8.4
+        run: gradle wrapper --gradle-version 8.9 # <-- SUDAH DIPERBAIKI MENJADI 8.9
 
       - name: 🔐 Make gradlew executable
         run: chmod +x gradlew
@@ -350,7 +351,7 @@ jobs:
 
       - name: 📤 Upload build logs
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() # Memastikan log selalu diupload meskipun build error
         with:
           name: build-logs-${{ needs.pre_build.outputs.short_sha }}
           path: |
@@ -406,10 +407,10 @@ jobs:
           echo ""
           if [ "$BUILD" == "success" ]; then
             echo "🎉 BUILD SUCCESSFUL!"
-            echo "   Download the APK from the Artifacts section above."
+            echo "   Download the APK dari bagian Artifacts."
           elif [ "$BUILD" == "failure" ]; then
             echo "💥 BUILD FAILED!"
-            echo "   Check the build logs in the Artifacts section."
+            echo "   Silakan download 'build-logs' di bagian Artifacts untuk melihat detail error."
           else
             echo "⚠️  Build did not complete — check job logs."
           fi
