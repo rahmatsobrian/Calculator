@@ -1,0 +1,494 @@
+name: 🔨 Build Calculator APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (debug/release)'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+      run_tests:
+        description: 'Run unit tests'
+        required: false
+        default: true
+        type: boolean
+
+# Cancel previous runs if a new push is made
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '17'
+  GRADLE_OPTS: '-Dorg.gradle.jvmargs=-Xmx4096m -Dorg.gradle.parallel=true -Dorg.gradle.caching=true'
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: Pre-build checks & info logging
+  # ─────────────────────────────────────────────
+  pre_build:
+    name: 🔍 Pre-Build Checks
+    runs-on: ubuntu-latest
+    outputs:
+      build_type: ${{ steps.vars.outputs.build_type }}
+      version_name: ${{ steps.vars.outputs.version_name }}
+      version_code: ${{ steps.vars.outputs.version_code }}
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+      run_tests: ${{ steps.vars.outputs.run_tests }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔧 Set build variables
+        id: vars
+        run: |
+          echo "============================================"
+          echo "  CALCULATOR APP — PRE-BUILD ANALYSIS"
+          echo "============================================"
+
+          # Determine build type
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            BUILD_TYPE="release"
+          else
+            BUILD_TYPE="debug"
+          fi
+
+          # Determine if tests should run
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            RUN_TESTS="${{ github.event.inputs.run_tests }}"
+          else
+            RUN_TESTS="true"
+          fi
+
+          # Get version info from build.gradle
+          VERSION_CODE=$(grep 'versionCode' app/build.gradle | grep -o '[0-9]*' | head -1)
+          VERSION_NAME=$(grep 'versionName' app/build.gradle | grep -oP '"[^"]+"' | tr -d '"' | head -1)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+
+          echo "build_type=$BUILD_TYPE"         >> $GITHUB_OUTPUT
+          echo "version_name=$VERSION_NAME"     >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE"     >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA"           >> $GITHUB_OUTPUT
+          echo "run_tests=$RUN_TESTS"           >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "📦 App Version  : $VERSION_NAME ($VERSION_CODE)"
+          echo "🏗️  Build Type   : $BUILD_TYPE"
+          echo "🔀 Branch/Tag   : ${{ github.ref_name }}"
+          echo "📝 Commit       : $SHORT_SHA"
+          echo "👤 Triggered by : ${{ github.actor }}"
+          echo "🧪 Run Tests    : $RUN_TESTS"
+          echo "============================================"
+
+      - name: 📂 Log repository structure
+        run: |
+          echo ""
+          echo "📁 Repository structure:"
+          find . -type f \( -name "*.kt" -o -name "*.gradle" -o -name "*.xml" \) \
+            ! -path "./.git/*" ! -path "./build/*" ! -path "./.gradle/*" \
+            | sort
+
+      - name: 🔍 Validate Gradle wrapper
+        run: |
+          echo ""
+          echo "🔍 Validating Gradle wrapper..."
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+            echo "✅ gradlew found and made executable"
+          else
+            echo "❌ gradlew not found!"
+            exit 1
+          fi
+          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "✅ gradle-wrapper.properties found"
+            echo "   $(cat gradle/wrapper/gradle-wrapper.properties | grep distributionUrl)"
+          fi
+
+  # ─────────────────────────────────────────────
+  # JOB 2: Unit Tests
+  # ─────────────────────────────────────────────
+  unit_test:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: pre_build
+    if: needs.pre_build.outputs.run_tests == 'true'
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: 📦 Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: 🔐 Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: 📋 Log Gradle & Java versions
+        run: |
+          echo "============================================"
+          echo "  ENVIRONMENT INFO"
+          echo "============================================"
+          echo "☕ Java Version:"
+          java -version
+          echo ""
+          echo "🐘 Gradle Version:"
+          ./gradlew --version
+          echo "============================================"
+
+      - name: 🧪 Run unit tests
+        run: |
+          echo ""
+          echo "🧪 Running unit tests..."
+          ./gradlew test --stacktrace --info 2>&1 | tee test_output.log
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo ""
+            echo "✅ All unit tests passed!"
+          else
+            echo ""
+            echo "❌ Unit tests failed! Check the logs above."
+            exit $EXIT_CODE
+          fi
+
+      - name: 📊 Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          retention-days: 7
+
+      - name: 📈 Log test summary
+        if: always()
+        run: |
+          echo ""
+          echo "📊 Test Results Summary:"
+          if find app/build/test-results -name "*.xml" 2>/dev/null | head -1 | grep -q "."; then
+            TOTAL=$(grep -r 'tests=' app/build/test-results --include="*.xml" | grep -oP 'tests="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
+            FAILED=$(grep -r 'failures=' app/build/test-results --include="*.xml" | grep -oP 'failures="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
+            SKIPPED=$(grep -r 'skipped=' app/build/test-results --include="*.xml" | grep -oP 'skipped="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
+            echo "  Total   : ${TOTAL:-0}"
+            echo "  Failed  : ${FAILED:-0}"
+            echo "  Skipped : ${SKIPPED:-0}"
+          else
+            echo "  No XML test results found."
+          fi
+
+  # ─────────────────────────────────────────────
+  # JOB 3: Build APK
+  # ─────────────────────────────────────────────
+  build:
+    name: 🏗️ Build APK (${{ needs.pre_build.outputs.build_type }})
+    runs-on: ubuntu-latest
+    needs: [pre_build, unit_test]
+    if: |
+      always() &&
+      needs.pre_build.result == 'success' &&
+      (needs.unit_test.result == 'success' || needs.unit_test.result == 'skipped')
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ☕ Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: 📦 Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: wrapper
+
+      - name: 🔐 Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: 🗄️ Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.android/build-cache
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/libs.versions.toml', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: 📋 Log build environment
+        run: |
+          echo "============================================"
+          echo "  BUILD ENVIRONMENT"
+          echo "============================================"
+          echo "🖥️  Runner OS    : ${{ runner.os }}"
+          echo "🏃  Runner Arch  : $(uname -m)"
+          echo "💾  Disk Space   :"
+          df -h / | tail -1
+          echo ""
+          echo "🧠  RAM Available:"
+          free -h | grep Mem
+          echo ""
+          echo "🔧  Build Config :"
+          echo "    Version Name : ${{ needs.pre_build.outputs.version_name }}"
+          echo "    Version Code : ${{ needs.pre_build.outputs.version_code }}"
+          echo "    Build Type   : ${{ needs.pre_build.outputs.build_type }}"
+          echo "    Commit SHA   : ${{ needs.pre_build.outputs.short_sha }}"
+          echo "============================================"
+
+      - name: 🔧 Run Gradle dependencies resolution
+        run: |
+          echo ""
+          echo "📦 Resolving Gradle dependencies..."
+          ./gradlew dependencies --configuration releaseRuntimeClasspath --quiet || true
+          echo "✅ Dependencies resolved"
+
+      - name: 🏗️ Build Debug APK
+        if: needs.pre_build.outputs.build_type == 'debug'
+        run: |
+          echo ""
+          echo "🏗️  Building DEBUG APK..."
+          echo "----------------------------------------"
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --build-cache \
+            -Dkotlin.incremental=false \
+            2>&1 | tee build_output.log
+
+          EXIT_CODE=${PIPESTATUS[0]}
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "❌ Build FAILED! Showing last 50 lines of log:"
+            tail -50 build_output.log
+            exit $EXIT_CODE
+          fi
+          echo "✅ Debug APK built successfully!"
+
+      - name: 🏗️ Build Release APK (unsigned)
+        if: needs.pre_build.outputs.build_type == 'release'
+        run: |
+          echo ""
+          echo "🏗️  Building RELEASE APK..."
+          echo "----------------------------------------"
+          ./gradlew assembleRelease \
+            --stacktrace \
+            --build-cache \
+            -Dkotlin.incremental=false \
+            2>&1 | tee build_output.log
+
+          EXIT_CODE=${PIPESTATUS[0]}
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "❌ Build FAILED! Showing last 50 lines of log:"
+            tail -50 build_output.log
+            exit $EXIT_CODE
+          fi
+          echo "✅ Release APK built successfully!"
+
+      - name: 📊 Log APK info
+        run: |
+          echo ""
+          echo "============================================"
+          echo "  APK BUILD RESULTS"
+          echo "============================================"
+          BUILD_TYPE="${{ needs.pre_build.outputs.build_type }}"
+
+          find app/build/outputs/apk -name "*.apk" 2>/dev/null | while read apk; do
+            SIZE=$(du -sh "$apk" | cut -f1)
+            echo "📱 APK: $(basename $apk)"
+            echo "   Path : $apk"
+            echo "   Size : $SIZE"
+          done
+
+          echo ""
+          echo "📁 Build output directory:"
+          find app/build/outputs -type f 2>/dev/null | sort
+          echo "============================================"
+
+      - name: 📁 Rename APK with version info
+        run: |
+          BUILD_TYPE="${{ needs.pre_build.outputs.build_type }}"
+          VERSION="${{ needs.pre_build.outputs.version_name }}"
+          SHA="${{ needs.pre_build.outputs.short_sha }}"
+
+          find app/build/outputs/apk -name "*.apk" | while read apk; do
+            DIR=$(dirname "$apk")
+            FILENAME="Calculator-v${VERSION}-${BUILD_TYPE}-${SHA}.apk"
+            mv "$apk" "$DIR/$FILENAME"
+            echo "✅ Renamed to: $FILENAME"
+          done
+
+      - name: 📤 Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Calculator-APK-${{ needs.pre_build.outputs.build_type }}-${{ needs.pre_build.outputs.short_sha }}
+          path: app/build/outputs/apk/**/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 📤 Upload build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs-${{ needs.pre_build.outputs.short_sha }}
+          path: |
+            build_output.log
+            app/build/reports/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # JOB 4: Post-build summary
+  # ─────────────────────────────────────────────
+  summary:
+    name: 📋 Build Summary
+    runs-on: ubuntu-latest
+    needs: [pre_build, unit_test, build]
+    if: always()
+
+    steps:
+      - name: 📋 Print final summary
+        run: |
+          echo "============================================"
+          echo "  CALCULATOR APP — BUILD SUMMARY"
+          echo "============================================"
+          echo ""
+          echo "📦 App Info:"
+          echo "   Version   : ${{ needs.pre_build.outputs.version_name }} (${{ needs.pre_build.outputs.version_code }})"
+          echo "   Build Type: ${{ needs.pre_build.outputs.build_type }}"
+          echo "   Commit    : ${{ needs.pre_build.outputs.short_sha }}"
+          echo "   Branch    : ${{ github.ref_name }}"
+          echo "   Triggered : ${{ github.actor }}"
+          echo ""
+          echo "📊 Job Results:"
+
+          PRE_BUILD="${{ needs.pre_build.result }}"
+          UNIT_TEST="${{ needs.unit_test.result }}"
+          BUILD="${{ needs.build.result }}"
+
+          print_status() {
+            local job=$1
+            local result=$2
+            case $result in
+              success)  echo "   ✅ $job: SUCCESS" ;;
+              failure)  echo "   ❌ $job: FAILED" ;;
+              skipped)  echo "   ⏭️  $job: SKIPPED" ;;
+              cancelled) echo "   🚫 $job: CANCELLED" ;;
+              *)        echo "   ❓ $job: $result" ;;
+            esac
+          }
+
+          print_status "Pre-Build Checks" "$PRE_BUILD"
+          print_status "Unit Tests      " "$UNIT_TEST"
+          print_status "Build APK       " "$BUILD"
+
+          echo ""
+          if [ "$BUILD" == "success" ]; then
+            echo "🎉 BUILD SUCCESSFUL!"
+            echo "   Download the APK from the Artifacts section above."
+          elif [ "$BUILD" == "failure" ]; then
+            echo "💥 BUILD FAILED!"
+            echo "   Check the build logs in the Artifacts section."
+          else
+            echo "⚠️  Build did not complete — check job logs."
+          fi
+          echo ""
+          echo "🕐 Completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "============================================"
+
+      - name: ✅ Set workflow conclusion
+        run: |
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "Workflow completed successfully ✅"
+          else
+            echo "Workflow had failures ❌"
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────
+  # JOB 5: Auto Release (only on version tags)
+  # ─────────────────────────────────────────────
+  release:
+    name: 🚀 Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [pre_build, build]
+    if: |
+      startsWith(github.ref, 'refs/tags/v') &&
+      needs.build.result == 'success'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Calculator-APK-release-${{ needs.pre_build.outputs.short_sha }}
+          path: ./release-apks
+
+      - name: 📋 List downloaded artifacts
+        run: |
+          echo "📁 Files to be released:"
+          ls -lah ./release-apks/
+
+      - name: 🚀 Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Calculator ${{ needs.pre_build.outputs.version_name }}"
+          body: |
+            ## 🧮 Calculator App ${{ needs.pre_build.outputs.version_name }}
+
+            ### ✨ Features
+            - Material You / Material 3 design with Dynamic Colors
+            - Scientific calculator with full trigonometry support
+            - Degree/Radian toggle
+            - Memory operations (MC, MR, M+, MS)
+            - Calculation history (last 20 entries)
+            - Animated display transitions
+            - Edge-to-edge UI
+
+            ### 📦 Build Info
+            - **Version Code:** ${{ needs.pre_build.outputs.version_code }}
+            - **Commit:** ${{ needs.pre_build.outputs.short_sha }}
+            - **Built by:** GitHub Actions
+
+            ### 📱 Requirements
+            - Android 8.0+ (API 26+)
+            - Dynamic colors require Android 12+ (API 31+)
+          files: ./release-apks/*.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true
